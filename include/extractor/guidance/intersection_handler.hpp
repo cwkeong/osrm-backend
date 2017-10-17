@@ -19,8 +19,8 @@
 
 #include <boost/optional.hpp>
 
-//#define PRINT false
-#define PRINT true
+#define PRINT false
+//#define PRINT true
 
 namespace osrm
 {

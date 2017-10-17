@@ -249,7 +249,7 @@ Feature: Simple Turns
             | a    | f  | charlot,fried | depart,arrive           |
             | a    | g  | charlot,,     | depart,turn left,arrive |
 
-    # https://www.openstreetmap.org/map=20/52.46815/13.33984
+    # https://www.openstreetmap.org/#map=20/52.46815/13.33984
     Scenario: Curve onto end of the road
         Given the node map
             """
@@ -539,7 +539,8 @@ Feature: Simple Turns
                                  `
             a - - - - - - - - - b - - - - - e
                                    `
-                                       `
+                                      `
+                                        `
                                            `c
             """
 
