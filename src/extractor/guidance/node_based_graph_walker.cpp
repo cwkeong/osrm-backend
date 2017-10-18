@@ -110,6 +110,129 @@ SelectStraightmostRoadByNameAndOnlyChoice::SelectStraightmostRoadByNameAndOnlyCh
 }
 
 boost::optional<EdgeID> SelectStraightmostRoadByNameAndOnlyChoice::
+operator()(const NodeID nid,
+           const EdgeID /*via_edge_id*/,
+           const IntersectionView &intersection,
+           const util::NodeBasedDynamicGraph &node_based_graph,
+           const EdgeBasedNodeDataContainer &node_data_container) const
+{
+    BOOST_ASSERT(!intersection.empty());
+    if (intersection.size() == 1)
+        return {};
+
+    const auto comparator = [&](const IntersectionViewData &lhs, const IntersectionViewData &rhs) {
+        // the score of an elemnt results in an ranking preferring valid entries, if required over
+        // invalid requested name_ids over non-requested narrow deviations over non-narrow
+        const auto score = [&](const IntersectionViewData &road) {
+            double result_score = 0;
+            // since angular deviation is limited by 0-180, we add 360 for invalid
+            if (requires_entry && !road.entry_allowed)
+                result_score += 360.;
+
+            // 180 for undesired name-ids
+            if (desired_name_id !=
+                node_data_container
+                    .GetAnnotation(node_based_graph.GetEdgeData(road.eid).annotation_data)
+                    .name_id)
+                result_score += 180;
+
+            return result_score + angularDeviation(road.angle, STRAIGHT_ANGLE);
+        };
+
+        return score(lhs) < score(rhs);
+    };
+
+    const auto count_desired_name =
+        std::count_if(std::begin(intersection), std::end(intersection), [&](const auto &road) {
+            return node_data_container
+                       .GetAnnotation(node_based_graph.GetEdgeData(road.eid).annotation_data)
+                       .name_id == desired_name_id;
+        });
+    if (count_desired_name > 2)
+        return {};
+
+    const auto min_element =
+        std::min_element(std::next(std::begin(intersection)), std::end(intersection), comparator);
+
+    const auto is_valid_choice = !requires_entry || min_element->entry_allowed;
+    const auto is_only_choice_with_same_name =
+        count_desired_name <= 2 && //  <= in case we come from a bridge, otherwise we have a u-turn
+                                   //  and the outgoing edge
+        node_data_container
+                .GetAnnotation(node_based_graph.GetEdgeData(min_element->eid).annotation_data)
+                .name_id == desired_name_id &&
+        angularDeviation(min_element->angle, STRAIGHT_ANGLE) < 100; // don't do crazy turns
+    const auto has_valid_angle =
+        ((intersection.size() == 2 ||
+          intersection.findClosestTurn(STRAIGHT_ANGLE) == min_element) &&
+         angularDeviation(min_element->angle, STRAIGHT_ANGLE) < NARROW_TURN_ANGLE) &&
+        angularDeviation(initial_bearing, min_element->bearing) < NARROW_TURN_ANGLE;
+
+    // do not allow major turns in the road, if other similar turns are present
+    // e.g.a turn at the end of the road:
+    //
+    // a - - a - - a - b - b
+    //             |
+    //       a - - a
+    //             |
+    //             c
+    //
+    // Such a turn can never be part of a merge
+    // We check if there is a similar turn to the other side. If such a turn exists, we consider the
+    // continuation of the road not possible
+    if (util::angularDeviation(STRAIGHT_ANGLE, min_element->angle) > GROUP_ANGLE)
+    {
+        auto deviation = util::angularDeviation(STRAIGHT_ANGLE, min_element->angle);
+        auto opposite_angle = min_element->angle >= STRAIGHT_ANGLE ? (STRAIGHT_ANGLE - deviation)
+                                                                   : (STRAIGHT_ANGLE + deviation);
+        auto opposite = intersection.findClosestTurn(opposite_angle);
+        auto opposite_deviation = util::angularDeviation(STRAIGHT_ANGLE, opposite->angle);
+        if (opposite_deviation <= deviation || (deviation / opposite_deviation) < 1.5)
+        {
+            return {};
+        }
+
+        auto const best = intersection.findClosestTurn(STRAIGHT_ANGLE);
+        if (util::angularDeviation(best->angle, STRAIGHT_ANGLE) < NARROW_TURN_ANGLE)
+        {
+            return {};
+        }
+    }
+
+    /*
+        std::cout << "[intersection] -> searching for " << desired_name_id << "\n";
+        for (auto road : intersection)
+            std::cout << "\t" << toString(road) << " NID: "
+                      << node_data_container
+                             .GetAnnotation(node_based_graph.GetEdgeData(road.eid).annotation_data)
+                             .name_id << std::endl;
+        std::cout << "Choices: " << is_only_choice_with_same_name << " (vs: "
+                  << (count_desired_name < 2 &&
+                      node_data_container
+                              .GetAnnotation(
+                                  node_based_graph.GetEdgeData(min_element->eid).annotation_data)
+                              .name_id == desired_name_id &&
+                      angularDeviation(min_element->angle, STRAIGHT_ANGLE) < 100)
+                  << ")" << " -> " << (!is_valid_choice || !(is_only_choice_with_same_name ||
+       has_valid_angle)) << std::endl;
+    */
+
+    // in cases where we have two edges between roads, we can have quite severe angles due to the
+    // random split OSRM does to break up parallel edges at any coordinate
+    if (!is_valid_choice || !(is_only_choice_with_same_name || has_valid_angle))
+        return {};
+    else
+        return (*min_element).eid;
+}
+
+SelectStraightmostRoadByNameAndOnlyChoiceOLD::SelectStraightmostRoadByNameAndOnlyChoiceOLD(
+    const NameID desired_name_id, const double initial_bearing, const bool requires_entry)
+    : desired_name_id(desired_name_id), initial_bearing(initial_bearing),
+      requires_entry(requires_entry)
+{
+}
+
+boost::optional<EdgeID> SelectStraightmostRoadByNameAndOnlyChoiceOLD::
 operator()(const NodeID /*nid*/,
            const EdgeID /*via_edge_id*/,
            const IntersectionView &intersection,

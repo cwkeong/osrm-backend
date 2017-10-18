@@ -143,6 +143,30 @@ struct SelectStraightmostRoadByNameAndOnlyChoice
     const bool requires_entry;
 };
 
+struct SelectStraightmostRoadByNameAndOnlyChoiceOLD
+{
+    SelectStraightmostRoadByNameAndOnlyChoiceOLD(const NameID desired_name_id,
+                                                 const double initial_bearing,
+                                                 const bool requires_entry);
+
+    /*
+     * !! REQUIRED - Function for the use of TraverseRoad in the graph walker.
+     * The operator() needs to return (if any is found) the next road to continue in the graph
+     * traversal. If no such edge is found, return {} is allowed. Usually you want to choose some
+     * form of obious turn to follow.
+     */
+    boost::optional<EdgeID> operator()(const NodeID nid,
+                                       const EdgeID via_edge_id,
+                                       const IntersectionView &intersection,
+                                       const util::NodeBasedDynamicGraph &node_based_graph,
+                                       const EdgeBasedNodeDataContainer &node_data_container) const;
+
+  private:
+    const NameID desired_name_id;
+    const double initial_bearing;
+    const bool requires_entry;
+};
+
 // find the next intersection given a hop limit
 struct IntersectionFinderAccumulator
 {

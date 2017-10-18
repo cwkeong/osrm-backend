@@ -395,6 +395,136 @@ bool MergableRoadDetector::HaveSameDirection(const NodeID intersection_node,
 
     const auto combined_road_width = 0.5 * (lane_count_lhs + lane_count_rhs) * ASSUMED_LANE_WIDTH;
     const auto constexpr MAXIMAL_ALLOWED_SEPARATION_WIDTH = 8;
+
+    return distance_between_roads <= combined_road_width + MAXIMAL_ALLOWED_SEPARATION_WIDTH;
+}
+
+bool MergableRoadDetector::HaveSameDirectionOLD(const NodeID intersection_node,
+                                                const MergableRoadData &lhs,
+                                                const MergableRoadData &rhs) const
+{
+    if (angularDeviation(lhs.bearing, rhs.bearing) > MERGABLE_ANGLE_DIFFERENCE)
+        return false;
+
+    // Find a coordinate following a road that is far away
+    NodeBasedGraphWalker graph_walker(
+        node_based_graph, node_data_container, intersection_generator);
+    const auto getCoordinatesAlongWay = [&](const EdgeID edge_id, const double max_length) {
+        LengthLimitedCoordinateAccumulator accumulator(coordinate_extractor, max_length);
+        SelectStraightmostRoadByNameAndOnlyChoiceOLD selector(
+            node_data_container.GetAnnotation(node_based_graph.GetEdgeData(edge_id).annotation_data)
+                .name_id,
+            lhs.bearing,
+            /*requires_entry=*/false);
+        graph_walker.TraverseRoad(intersection_node, edge_id, accumulator, selector);
+
+        return std::make_pair(accumulator.accumulated_length, accumulator.coordinates);
+    };
+
+    std::vector<util::Coordinate> coordinates_to_the_left, coordinates_to_the_right;
+    double distance_traversed_to_the_left, distance_traversed_to_the_right;
+
+    // many roads only do short parallel segments. To get a good impression of how `parallel` two
+    // roads are, we look 100 meters down the road (wich can be quite short for very broad roads).
+    const double constexpr distance_to_extract = 150;
+
+    std::tie(distance_traversed_to_the_left, coordinates_to_the_left) =
+        getCoordinatesAlongWay(lhs.eid, distance_to_extract);
+
+    // tuned parameter, if we didn't get as far as 40 meters, we might barely look past an
+    // intersection.
+    const auto constexpr MINIMUM_LENGTH_FOR_PARALLEL_DETECTION = 40;
+    // quit early if the road is not very long
+    if (distance_traversed_to_the_left <= MINIMUM_LENGTH_FOR_PARALLEL_DETECTION)
+        return false;
+
+    std::tie(distance_traversed_to_the_right, coordinates_to_the_right) =
+        getCoordinatesAlongWay(rhs.eid, distance_to_extract);
+
+    if (distance_traversed_to_the_right <= MINIMUM_LENGTH_FOR_PARALLEL_DETECTION)
+        return false;
+
+    const auto connect_again = (coordinates_to_the_left.back() == coordinates_to_the_right.back());
+
+    // Tuning parameter to detect and don't merge roads close to circular shapes
+    // if the area to squared circumference ratio is between the lower bound and 1/(4π)
+    // that correspond to isoperimetric inequality 4πA ≤ L² or lower bound ≤ A/L² ≤ 1/(4π).
+    // The lower bound must be larger enough to allow merging of square-shaped intersections
+    // with A/L² = 1/16 or 78.6%
+    // The condition suppresses roads merging for intersections like
+    //             .  .
+    //           .      .
+    //       ----        ----
+    //           .      .
+    //             .  .
+    // but will allow roads merging for intersections like
+    //           -------
+    //          /       \ 
+    //      ----         ----
+    //          \       /
+    //           -------
+    const auto constexpr CIRCULAR_POLYGON_ISOPERIMETRIC_LOWER_BOUND = 0.85 / (4 * M_PI);
+    if (connect_again && coordinates_to_the_left.front() == coordinates_to_the_left.back())
+    { // if the left and right roads connect again and are closed polygons ...
+        const auto area = util::coordinate_calculation::computeArea(coordinates_to_the_left);
+        const auto perimeter = distance_traversed_to_the_left;
+        const auto area_to_squared_perimeter_ratio = std::abs(area) / (perimeter * perimeter);
+
+        // then don't merge roads if A/L² is greater than the lower bound
+        BOOST_ASSERT(area_to_squared_perimeter_ratio <= 1. / (4 * M_PI));
+        if (area_to_squared_perimeter_ratio >= CIRCULAR_POLYGON_ISOPERIMETRIC_LOWER_BOUND)
+            return false;
+    }
+
+    // sampling to correctly weight longer segments in regression calculations
+    const auto constexpr SAMPLE_INTERVAL = 5;
+    coordinates_to_the_left = coordinate_extractor.SampleCoordinates(
+        std::move(coordinates_to_the_left), distance_to_extract, SAMPLE_INTERVAL);
+
+    coordinates_to_the_right = coordinate_extractor.SampleCoordinates(
+        std::move(coordinates_to_the_right), distance_to_extract, SAMPLE_INTERVAL);
+
+    /* extract the number of lanes for a road
+     * restricts a vector to the last two thirds of the length
+     */
+    const auto prune = [](auto &data_vector) {
+        BOOST_ASSERT(data_vector.size() >= 3);
+        // erase the first third of the vector
+        data_vector.erase(data_vector.begin(), data_vector.begin() + data_vector.size() / 3);
+    };
+
+    /* if the coordinates meet up again, e.g. due to a split and join, pruning can have a negative
+     * effect. We therefore only prune away the beginning, if the roads don't meet up again as well.
+     */
+    if (!connect_again)
+    {
+        prune(coordinates_to_the_left);
+        prune(coordinates_to_the_right);
+    }
+
+    const auto are_parallel =
+        util::coordinate_calculation::areParallel(coordinates_to_the_left.begin(),
+                                                  coordinates_to_the_left.end(),
+                                                  coordinates_to_the_right.begin(),
+                                                  coordinates_to_the_right.end());
+
+    if (!are_parallel)
+        return false;
+
+    // compare reference distance:
+    const auto distance_between_roads = util::coordinate_calculation::findClosestDistance(
+        coordinates_to_the_left[coordinates_to_the_left.size() / 2],
+        coordinates_to_the_right.begin(),
+        coordinates_to_the_right.end());
+
+    const auto lane_count_lhs = std::max<int>(
+        1, node_based_graph.GetEdgeData(lhs.eid).flags.road_classification.GetNumberOfLanes());
+    const auto lane_count_rhs = std::max<int>(
+        1, node_based_graph.GetEdgeData(rhs.eid).flags.road_classification.GetNumberOfLanes());
+
+    const auto combined_road_width = 0.5 * (lane_count_lhs + lane_count_rhs) * ASSUMED_LANE_WIDTH;
+    const auto constexpr MAXIMAL_ALLOWED_SEPARATION_WIDTH = 8;
+
     return distance_between_roads <= combined_road_width + MAXIMAL_ALLOWED_SEPARATION_WIDTH;
 }
 

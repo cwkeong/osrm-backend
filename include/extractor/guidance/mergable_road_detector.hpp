@@ -117,6 +117,10 @@ class MergableRoadDetector
                            const MergableRoadData &lhs,
                            const MergableRoadData &rhs) const;
 
+    bool HaveSameDirectionOLD(const NodeID intersection_node,
+                              const MergableRoadData &lhs,
+                              const MergableRoadData &rhs) const;
+
     // Detector for small traffic islands. If a road is splitting up, just to connect again later,
     // we don't wan't to have this information within our list of intersections/possible turn
     // locations.
