@@ -975,18 +975,24 @@ void EdgeBasedGraphFactory::GenerateEdgeExpandedEdges(
                           }
                       });
 
-    // re-hash conditionals to ocnnect to their respective edge-based edges. Due to the
-    // ordering, we
-    // do not really have a choice but to index the conditional penalties and walk over all
-    // edge-based-edges to find the ID of the edge
+    // Re-hash conditionals to connect to their respective edge-based edges,
+    // by indexing the penalties and finding the IDs of each edge in the edge-based-edges
     auto const indexed_conditionals = IndexConditionals(std::move(conditionals));
+
     {
-        util::Log() << "Writing " << indexed_conditionals.size()
-                    << " conditional turn penalties...";
-        // write conditional turn penalties into the restrictions file
-        storage::io::FileWriter writer(conditional_penalties_filename,
-                                       storage::io::FileWriter::GenerateFingerprint);
-        extractor::serialization::write(writer, indexed_conditionals);
+        if (!indexed_conditionals.empty())
+        {
+            util::Log() << "Writing " << indexed_conditionals.size()
+                        << " conditional restrictions...";
+            // write conditional turn penalties into the restrictions file
+            storage::io::FileWriter writer(conditional_penalties_filename,
+                                           storage::io::FileWriter::GenerateFingerprint);
+            extractor::serialization::write(writer, indexed_conditionals);
+        }
+        else
+        {
+            util::Log() << "No conditional restrictions to write.";
+        }
     }
 
     // write weight penalties per turn
